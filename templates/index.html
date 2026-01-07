@@ -33,13 +33,18 @@
         <div class="d-grid gap-2 d-lg-flex align-items-lg-end">
           <select name="standard" class="form-select" required>
             <option value="">-- Select Standard --</option>
+
             {% for std in standards %}
-              <option value="{{ std }}" {% if selected == std %}selected{% endif %}>{{ std }}</option>
+              <option value="{{ std }}" {{ 'selected="selected"' if selected == std else '' }}>
+                {{ std }}
+              </option>
             {% endfor %}
+
           </select>
           <button class="btn btn-primary ms-lg-2" type="submit">Calculate</button>
         </div>
       </div>
+
     </form>
 
     <!-- Processing Progress Bar -->
@@ -76,8 +81,8 @@
             <tr>
               <th>Standard</th>
               <th>Publication Date</th>
-              <th>TFIDF Keywords (Top 10)</th>
-              <th>Contextual Keywords (Top 10)</th>
+              <th>TFIDF Keywords</th>
+              <th>Contextual Keywords</th>
               <th>Combined Keywords</th>
             </tr>
           </thead>
@@ -125,7 +130,7 @@
         <table class="table table-bordered align-middle">
           <thead class="table-info">
             <tr>
-              <th>Standard / Bank Report</th>
+              <th>Bank Report</th>
               <th>Publication Date</th>
               <th>TFIDF Keywords</th>
               <th>Contextual Keywords</th>
@@ -186,6 +191,7 @@
     {% endif %}
   </div>
 
+  <!-- Progress bar script -->
   <script>
     document.addEventListener("DOMContentLoaded", function () {
       const form = document.getElementById("analyze-form");
