@@ -21,21 +21,25 @@ logging.basicConfig(level=logging.INFO)
 
 # ---------------- Config ----------------
 UPLOAD_FOLDER = "uploads"
-ALLOWED_EXT = {".pdf"}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
 CSV_PATH = "standards_keywords.csv"
 
-# IMPORTANT: keep requests fast on Azure
-MAX_PDF_CHARS = int(os.environ.get("MAX_PDF_CHARS", "120000"))   # for overall processing
-MAX_KB_CHARS  = int(os.environ.get("MAX_KB_CHARS", "40000"))     # for KeyBERT input (smaller = faster)
-
-# Model choice:
-# - Default: smaller & fast for Azure
-# - If you really need Alibaba large: set MODEL_NAME="Alibaba-NLP/gte-large-en-v1.5" in Azure App Settings
+# Fast + cloud-safe defaults (override in Azure App Settings)
 MODEL_NAME = os.environ.get("MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
 TRUST_REMOTE_CODE = os.environ.get("TRUST_REMOTE_CODE", "false").lower() == "true"
+
+# If you want to truly read/process entire PDF text, raise/remove this
+MAX_PDF_CHARS = int(os.environ.get("MAX_PDF_CHARS", "120000"))   # total processing cap
+MAX_KB_CHARS  = int(os.environ.get("MAX_KB_CHARS", "40000"))     # KeyBERT input cap
+PREVIEW_CHARS = int(os.environ.get("PREVIEW_CHARS", "8000"))     # preview on UI
+
+# For big PDFs + large models: chunk embedding is safer than one giant encode
+USE_CHUNKING = os.environ.get("USE_CHUNKING", "true").lower() == "true"
+CHUNK_WORDS  = int(os.environ.get("CHUNK_WORDS", "1800"))        # words per chunk
+
+ALLOWED_EXT = {".pdf"}
 
 # ---------------- Load standards CSV ----------------
 standards_df = pd.read_csv(CSV_PATH, dtype=str, encoding="utf-8")
@@ -87,9 +91,9 @@ standards_df_copy["TFIDF Keywords List"] = standards_df_copy["TFIDF Keywords"].a
 standards_df_copy["Contextual Keywords List"] = standards_df_copy["Contextual Keywords"].apply(parse_keywords)
 standards_df_copy["Combined Keywords List"] = standards_df_copy["Combined Keywords"].apply(parse_keywords)
 
-standards_df_copy["TFIDF Keywords Display"] = standards_df_copy["TFIDF Keywords List"].apply(lambda lst: ", ".join(lst))
-standards_df_copy["Contextual Keywords Display"] = standards_df_copy["Contextual Keywords List"].apply(lambda lst: ", ".join(lst))
-standards_df_copy["Combined Keywords Display"] = standards_df_copy["Combined Keywords List"].apply(lambda lst: ", ".join(lst))
+standards_df_copy["TFIDF Keywords Display"] = standards_df_copy["TFIDF Keywords List"].apply(lambda lst: "\n".join(lst))
+standards_df_copy["Contextual Keywords Display"] = standards_df_copy["Contextual Keywords List"].apply(lambda lst: "\n".join(lst))
+standards_df_copy["Combined Keywords Display"] = standards_df_copy["Combined Keywords List"].apply(lambda lst: "\n".join(lst))
 
 # ---------------- Stopwords ----------------
 custom_stopwords = set([
@@ -120,10 +124,10 @@ def extract_tfidf_keywords(text: str, top_n=5):
     df_kw = pd.DataFrame(x.toarray(), columns=vectorizer.get_feature_names_out()).transpose()
     return df_kw.sort_values(by=0, ascending=False).head(top_n).index.tolist()
 
-# ---------------- Lazy-load model + cache standard embeddings ----------------
+# ---------------- Models + cache ----------------
 EMBED_MODEL = None
 KEYEXTRACTOR = None
-STANDARD_EMBEDDINGS = {}
+STANDARD_EMBEDDINGS = {}  # name -> tensor(1, dim)
 
 def get_models():
     global EMBED_MODEL, KEYEXTRACTOR
@@ -139,18 +143,35 @@ def get_models():
         logging.info("Model loaded.")
     return EMBED_MODEL, KEYEXTRACTOR
 
+def chunk_text_words(text: str, chunk_words: int):
+    words = text.split()
+    for i in range(0, len(words), chunk_words):
+        yield " ".join(words[i:i + chunk_words])
+
 def encode_text(model, text: str):
     if not text or not str(text).strip():
         return None
-    # SentenceTransformer can directly return tensors
+
+    if USE_CHUNKING:
+        chunks = list(chunk_text_words(str(text), CHUNK_WORDS))
+        if not chunks:
+            return None
+        embs = []
+        for c in chunks:
+            emb = model.encode(c, convert_to_tensor=True, normalize_embeddings=True)
+            embs.append(emb)
+        mean_emb = torch.stack(embs).mean(dim=0)  # (dim,)
+        return mean_emb.unsqueeze(0)              # (1, dim)
+
     emb = model.encode(str(text), convert_to_tensor=True, normalize_embeddings=True)
-    return emb.unsqueeze(0)  # shape (1, dim)
+    return emb.unsqueeze(0)
 
 def build_standard_embeddings_if_needed():
     global STANDARD_EMBEDDINGS
     if STANDARD_EMBEDDINGS:
         return
     model, _ = get_models()
+
     tmp = {}
     for _, row in standards_df_copy.iterrows():
         name = str(row["Standards"]).strip()
@@ -162,15 +183,12 @@ def build_standard_embeddings_if_needed():
     STANDARD_EMBEDDINGS = tmp
     logging.info(f"Cached standard embeddings: {len(STANDARD_EMBEDDINGS)}")
 
-# ---------------- Contextual keywords (KeyBERT) ----------------
+# ---------------- KeyBERT keywords ----------------
 def extract_contextual_keywords(text: str, top_n=5):
     if not text or not text.strip():
         return []
     _, keyextractor = get_models()
-
-    # keep KeyBERT fast
-    short_text = text[:MAX_KB_CHARS]
-
+    short_text = text[:MAX_KB_CHARS]  # keep fast
     results = keyextractor.extract_keywords(
         short_text,
         keyphrase_ngram_range=(2, 2),
@@ -179,14 +197,13 @@ def extract_contextual_keywords(text: str, top_n=5):
     )
     return [x[0] for x in results]
 
-def extract_value(ctx_list, tfidf_list):
-    return ", ".join(ctx_list + tfidf_list)
+def combined_keywords_str(ctx_list, tfidf_list):
+    return ", ".join([w for w in (ctx_list + tfidf_list) if w])
 
 # ---------------- PDF reading ----------------
-def read_and_clean_pdf(path: str, num_header=6):
+def read_pdf_text(path: str, num_header=6):
     """
-    Returns (full_text, error_message).
-    If encrypted and cannot be decrypted, returns ("", "message").
+    Reads all pages, returns (full_text, error_message)
     """
     try:
         reader = PdfReader(path)
@@ -197,22 +214,22 @@ def read_and_clean_pdf(path: str, num_header=6):
             except Exception:
                 return "", "This PDF is encrypted. Please upload an unencrypted PDF."
 
-        cleaned_pages = []
+        pages = []
         for page in reader.pages:
             text = page.extract_text() or ""
             words = text.split()
-            cleaned_pages.append(" ".join(words[num_header:]))
+            pages.append(" ".join(words[num_header:]))
 
-        full = " ".join(cleaned_pages)
-        # IMPORTANT: limit size so Azure won’t timeout
-        full = full[:MAX_PDF_CHARS]
+        full = " ".join(pages)
+        if MAX_PDF_CHARS > 0:
+            full = full[:MAX_PDF_CHARS]
         return full, None
 
     except Exception as e:
         logging.exception("PDF read failed")
         return "", f"Cannot read this PDF on the server. Error: {type(e).__name__}"
 
-# ---------------- Publication date ----------------
+# ---------------- Pub date detection ----------------
 MONTHS = (
     r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
     r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t)?(?:ember)?|Oct(?:ober)?|"
@@ -228,7 +245,7 @@ def detect_publication_date(text: str):
     m = re.search(r"\b20\d{2}\b", text)
     return m.group(0) if m else ""
 
-# ---------------- Lookup standard ----------------
+# ---------------- Standard lookup ----------------
 def lookup_standard(std_name: str):
     row = standards_df_copy.loc[standards_df_copy["Standards"].astype(str).str.strip() == std_name]
     if row.empty:
@@ -242,11 +259,11 @@ def lookup_standard(std_name: str):
         "combined": r["Combined Keywords Display"],
     }
 
-# ---------------- Cosine similarity ----------------
-def calculate_cosine_similarity(a, b):
+# ---------------- Similarity ----------------
+def cosine_sim(a, b):
     if a is None or b is None:
         return 0.0
-    return round(F.cosine_similarity(a, b, dim=1).item(), 3)
+    return float(F.cosine_similarity(a, b, dim=1).item())
 
 # ---------------- Routes ----------------
 @app.route("/", methods=["GET"])
@@ -257,6 +274,7 @@ def home():
         selected=None,
         result=None,
         std_info=None,
+        pdf_text_preview="",
         error=None,
         message=None
     )
@@ -267,58 +285,93 @@ def analyze():
     pdf_file = request.files.get("bank_pdf")
 
     if not std:
-        return render_template("index.html", standards=standards_list, selected=None,
-                               result=None, std_info=None, error="Please select a standard.", message=None)
+        return render_template(
+            "index.html",
+            standards=standards_list,
+            selected=None,
+            result=None,
+            std_info=None,
+            pdf_text_preview="",
+            error="Please select a standard.",
+            message=None
+        )
 
     if not pdf_file or pdf_file.filename == "":
-        return render_template("index.html", standards=standards_list, selected=std,
-                               result=None, std_info=None, error="Please upload a Bank ESG report (PDF).", message=None)
+        return render_template(
+            "index.html",
+            standards=standards_list,
+            selected=std,
+            result=None,
+            std_info=None,
+            pdf_text_preview="",
+            error="Please upload a Bank ESG report (PDF).",
+            message=None
+        )
 
-    if os.path.splitext(pdf_file.filename)[1].lower() not in ALLOWED_EXT:
-        return render_template("index.html", standards=standards_list, selected=std,
-                               result=None, std_info=None, error="The uploaded file should be a PDF.", message=None)
+    ext = os.path.splitext(pdf_file.filename)[1].lower()
+    if ext not in ALLOWED_EXT:
+        return render_template(
+            "index.html",
+            standards=standards_list,
+            selected=std,
+            result=None,
+            std_info=None,
+            pdf_text_preview="",
+            error="Only .pdf files are accepted.",
+            message=None
+        )
 
     fname = secure_filename(pdf_file.filename)
     fpath = os.path.join(app.config["UPLOAD_FOLDER"], fname)
 
+    pdf_preview = ""
     try:
         pdf_file.save(fpath)
 
-        full_text, pdf_err = read_and_clean_pdf(fpath, num_header=6)
+        full_text, pdf_err = read_pdf_text(fpath, num_header=6)
+        pdf_preview = (full_text or "").strip()[:PREVIEW_CHARS]
+
         if pdf_err:
-            return render_template("index.html", standards=standards_list, selected=std,
-                                   result=None, std_info=None, error=pdf_err, message=None)
+            return render_template(
+                "index.html",
+                standards=standards_list,
+                selected=std,
+                result=None,
+                std_info=None,
+                pdf_text_preview=pdf_preview,
+                error=pdf_err,
+                message=None
+            )
 
-        bank_pub_date = detect_publication_date(full_text)
-
-        # build models + standard embeddings once
+        # Build cache once (fast for repeated requests)
         build_standard_embeddings_if_needed()
         model, _ = get_models()
 
-        # TFIDF from stopword-removed text (limited)
-        ns_text = remove_stopwords(full_text)[:MAX_PDF_CHARS]
-        tfidf_list = extract_tfidf_keywords(ns_text, top_n=5)
+        bank_pub_date = detect_publication_date(full_text)
 
-        # KeyBERT from limited text (fast)
+        # Keywords
+        ns_text = remove_stopwords(full_text)
+        tfidf_list = extract_tfidf_keywords(ns_text, top_n=5)
         contextual_list = extract_contextual_keywords(full_text, top_n=5)
 
-        combined_str = extract_value(contextual_list, tfidf_list)
-        combined_list = [w.strip() for w in combined_str.split(",") if w.strip()]
+        combined_str = combined_keywords_str(contextual_list, tfidf_list)
 
-        bank_embedding = encode_text(model, combined_str)
-        std_embedding = STANDARD_EMBEDDINGS.get(std)
+        # Embeddings
+        bank_emb = encode_text(model, combined_str)
+        std_emb = STANDARD_EMBEDDINGS.get(std)
 
-        similarity_score = calculate_cosine_similarity(bank_embedding, std_embedding)
+        sim = cosine_sim(bank_emb, std_emb)
+        sim_pct = round(sim * 100, 1)
+
         std_info = lookup_standard(std)
-
         result = {
             "filename": fname,
             "standard": std,
             "bank_pub_date": bank_pub_date,
-            "bank_tfidf": ", ".join(tfidf_list),
-            "bank_contextual": ", ".join(contextual_list),
-            "bank_combined": ", ".join(combined_list),
-            "similarity_score": similarity_score,
+            "bank_tfidf": "\n".join(tfidf_list),
+            "bank_contextual": "\n".join(contextual_list),
+            "bank_combined": "\n".join([w.strip() for w in combined_str.split(",") if w.strip()]),
+            "similarity_pct": sim_pct,
         }
 
         return render_template(
@@ -327,12 +380,26 @@ def analyze():
             selected=std,
             result=result,
             std_info=std_info,
+            pdf_text_preview=pdf_preview,
             error=None,
             message=None
         )
 
+    except Exception as e:
+        logging.exception("Analyze failed")
+        return render_template(
+            "index.html",
+            standards=standards_list,
+            selected=std,
+            result=None,
+            std_info=None,
+            pdf_text_preview=pdf_preview,
+            error=f"Server error: {type(e).__name__}. Please try a smaller PDF or increase timeout.",
+            message=None
+        )
+
     finally:
-        # Always delete uploads to avoid disk growth on Azure
+        # Always delete uploaded PDF after processing
         try:
             if os.path.exists(fpath):
                 os.remove(fpath)
