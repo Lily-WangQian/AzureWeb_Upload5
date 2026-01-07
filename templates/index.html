@@ -19,7 +19,7 @@
 
     <!-- Form -->
     <form id="analyze-form" class="row g-3" method="POST" action="/analyze" enctype="multipart/form-data">
-
+      
       <!-- Upload section -->
       <div class="col-12 col-lg-6">
         <label class="form-label">Upload Bank ESG PDF:</label>
@@ -35,16 +35,17 @@
             <option value="">-- Select Standard --</option>
 
             {% for std in standards %}
-              <option value="{{ std }}" {{ 'selected="selected"' if selected == std else '' }}>
-                {{ std }}
-              </option>
+              {% if selected == std %}
+                <option value="{{ std }}" selected="selected">{{ std }}</option>
+              {% else %}
+                <option value="{{ std }}">{{ std }}</option>
+              {% endif %}
             {% endfor %}
 
           </select>
           <button class="btn btn-primary ms-lg-2" type="submit">Calculate</button>
         </div>
       </div>
-
     </form>
 
     <!-- Processing Progress Bar -->
@@ -91,29 +92,38 @@
               <td>{{ std_info.standard }}</td>
               <td>{{ std_info.pub_date }}</td>
 
+              <!-- TFIDF -->
               <td>
                 <ul class="mb-0 ps-3">
-                  {% for kw in (std_info.tfidf or "").split(',') %}
+                  {% for kw in std_info.tfidf.split(',') %}
                     {% set k = kw.strip() %}
-                    {% if k %}<li>{{ k }}</li>{% endif %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
                   {% endfor %}
                 </ul>
               </td>
 
+              <!-- Contextual -->
               <td>
                 <ul class="mb-0 ps-3">
-                  {% for kw in (std_info.contextual or "").split(',') %}
+                  {% for kw in std_info.contextual.split(',') %}
                     {% set k = kw.strip() %}
-                    {% if k %}<li>{{ k }}</li>{% endif %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
                   {% endfor %}
                 </ul>
               </td>
 
+              <!-- Combined -->
               <td>
                 <ul class="mb-0 ps-3">
-                  {% for kw in (std_info.combined or "").split(',') %}
+                  {% for kw in std_info.combined.split(',') %}
                     {% set k = kw.strip() %}
-                    {% if k %}<li>{{ k }}</li>{% endif %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
                   {% endfor %}
                 </ul>
               </td>
@@ -124,13 +134,14 @@
       </div>
       {% endif %}
 
+      {% if result.bank_pub_date or result.bank_tfidf or result.bank_contextual or result.bank_combined %}
       <h5 class="mb-3">Uploaded Bank Report Analysis</h5>
 
       <div class="table-responsive mb-4">
         <table class="table table-bordered align-middle">
           <thead class="table-info">
             <tr>
-              <th>Bank Report</th>
+              <th>Standard / Bank Report</th>
               <th>Publication Date</th>
               <th>TFIDF Keywords</th>
               <th>Contextual Keywords</th>
@@ -142,38 +153,48 @@
               <td>{{ result.filename }}</td>
               <td>{{ result.bank_pub_date }}</td>
 
+              <!-- TFIDF -->
               <td>
                 <ul class="mb-0 ps-3">
-                  {% for kw in (result.bank_tfidf or "").split(',') %}
+                  {% for kw in result.bank_tfidf.split(',') %}
                     {% set k = kw.strip() %}
-                    {% if k %}<li>{{ k }}</li>{% endif %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
                   {% endfor %}
                 </ul>
               </td>
 
+              <!-- Contextual -->
               <td>
                 <ul class="mb-0 ps-3">
-                  {% for kw in (result.bank_contextual or "").split(',') %}
+                  {% for kw in result.bank_contextual.split(',') %}
                     {% set k = kw.strip() %}
-                    {% if k %}<li>{{ k }}</li>{% endif %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
                   {% endfor %}
                 </ul>
               </td>
 
+              <!-- Combined -->
               <td>
                 <ul class="mb-0 ps-3">
-                  {% for kw in (result.bank_combined or "").split(',') %}
+                  {% for kw in result.bank_combined.split(',') %}
                     {% set k = kw.strip() %}
-                    {% if k %}<li>{{ k }}</li>{% endif %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
                   {% endfor %}
                 </ul>
               </td>
-
             </tr>
           </tbody>
         </table>
       </div>
+      {% endif %}
 
+      {% if result.similarity_score is not none %}
       <hr>
       <h5>Embedding-based Similarity Score (Combined Keywords)</h5>
       <p>
@@ -182,6 +203,7 @@
           {{ (result.similarity_score * 100) | round(2) }}%
         </span>
       </p>
+      {% endif %}
 
       <hr>
       <h5>PDF Text Preview</h5>

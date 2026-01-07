@@ -99,7 +99,7 @@ def remove_stopwords(text: str):
 
 vectorizer = TfidfVectorizer(ngram_range=(2, 2))
 
-def extract_tfidf_keywords(text: str, top_n=5):
+def extract_tfidf_keywords(text: str, top_n=10):
     if not text or not text.strip():
         return []
     x = vectorizer.fit_transform([text])
@@ -143,7 +143,7 @@ def build_standard_embeddings_if_needed():
     STANDARD_EMBEDDINGS = tmp
     logging.info(f"Cached standard embeddings: {len(STANDARD_EMBEDDINGS)}")
 
-def extract_contextual_keywords(text: str, top_n=5):
+def extract_contextual_keywords(text: str, top_n=10):
     if not text or not text.strip():
         return []
     _, keyextractor = get_models()
@@ -264,8 +264,8 @@ def analyze():
 
         # keywords (comma-separated strings for HTML split(','))
         ns_text = remove_stopwords(full_text)
-        tfidf_list = extract_tfidf_keywords(ns_text, top_n=5)
-        contextual_list = extract_contextual_keywords(full_text, top_n=5)
+        tfidf_list = extract_tfidf_keywords(ns_text, top_n=10)
+        contextual_list = extract_contextual_keywords(full_text, top_n=10)
 
         combined_list = contextual_list + tfidf_list
         combined_list = [k.strip() for k in combined_list if k and k.strip()]
