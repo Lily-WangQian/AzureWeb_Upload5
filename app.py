@@ -15,45 +15,30 @@ import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
 from keybert import KeyBERT
 
-# ---------------- App ----------------
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ---------------- Config ----------------
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
 CSV_PATH = "standards_keywords.csv"
+ALLOWED_EXT = {".pdf"}
 
-# Fast + cloud-safe defaults (override in Azure App Settings)
+# ---- Azure-safe defaults (override in Azure App Settings later) ----
 MODEL_NAME = os.environ.get("MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
 TRUST_REMOTE_CODE = os.environ.get("TRUST_REMOTE_CODE", "false").lower() == "true"
 
-# If you want to truly read/process entire PDF text, raise/remove this
-MAX_PDF_CHARS = int(os.environ.get("MAX_PDF_CHARS", "120000"))   # total processing cap
-MAX_KB_CHARS  = int(os.environ.get("MAX_KB_CHARS", "40000"))     # KeyBERT input cap
-PREVIEW_CHARS = int(os.environ.get("PREVIEW_CHARS", "8000"))     # preview on UI
+MAX_PDF_CHARS = int(os.environ.get("MAX_PDF_CHARS", "120000"))   # total text to process
+MAX_KB_CHARS  = int(os.environ.get("MAX_KB_CHARS", "40000"))     # KeyBERT input length
+PREVIEW_CHARS = int(os.environ.get("PREVIEW_CHARS", "8000"))     # show preview on page
 
-# For big PDFs + large models: chunk embedding is safer than one giant encode
-USE_CHUNKING = os.environ.get("USE_CHUNKING", "true").lower() == "true"
-CHUNK_WORDS  = int(os.environ.get("CHUNK_WORDS", "1800"))        # words per chunk
-
-ALLOWED_EXT = {".pdf"}
-
-# ---------------- Load standards CSV ----------------
+# ---- Load standards CSV ----
 standards_df = pd.read_csv(CSV_PATH, dtype=str, encoding="utf-8")
 standards_df.columns = standards_df.columns.str.strip()
 
-required_cols = [
-    "Standards",
-    "Body",
-    "Publication Date",
-    "No Stopwords",
-    "TFIDF Keywords",
-    "Contextual Keywords",
-    "Combined Keywords",
-]
+required_cols = ["Standards", "Body", "Publication Date", "No Stopwords",
+                 "TFIDF Keywords", "Contextual Keywords", "Combined Keywords"]
 for col in required_cols:
     if col not in standards_df.columns:
         standards_df[col] = ""
@@ -70,7 +55,6 @@ standards_list = (
     .tolist()
 )
 
-# ---------------- Keyword parsing ----------------
 def parse_keywords(value):
     if isinstance(value, list):
         return [str(v).strip() for v in value if str(v).strip()]
@@ -91,20 +75,19 @@ standards_df_copy["TFIDF Keywords List"] = standards_df_copy["TFIDF Keywords"].a
 standards_df_copy["Contextual Keywords List"] = standards_df_copy["Contextual Keywords"].apply(parse_keywords)
 standards_df_copy["Combined Keywords List"] = standards_df_copy["Combined Keywords"].apply(parse_keywords)
 
-standards_df_copy["TFIDF Keywords Display"] = standards_df_copy["TFIDF Keywords List"].apply(lambda lst: "\n".join(lst))
-standards_df_copy["Contextual Keywords Display"] = standards_df_copy["Contextual Keywords List"].apply(lambda lst: "\n".join(lst))
-standards_df_copy["Combined Keywords Display"] = standards_df_copy["Combined Keywords List"].apply(lambda lst: "\n".join(lst))
+# IMPORTANT: keep comma-separated strings because your HTML uses split(',')
+standards_df_copy["TFIDF Keywords Display"] = standards_df_copy["TFIDF Keywords List"].apply(lambda lst: ", ".join(lst))
+standards_df_copy["Contextual Keywords Display"] = standards_df_copy["Contextual Keywords List"].apply(lambda lst: ", ".join(lst))
+standards_df_copy["Combined Keywords Display"] = standards_df_copy["Combined Keywords List"].apply(lambda lst: ", ".join(lst))
 
-# ---------------- Stopwords ----------------
+# ---- Stopwords + TFIDF ----
 custom_stopwords = set([
-    'shall','among','best','would','like','see','needs','•','their','to',
-    'requires','within','may','lot','etc','b','with','without','pdfs','shows','tells',
-    'e','g','also','always','however','go','–','by','for','that','and','or',
-    '0c','meet','includes','could','example','examples','chapter','an','a','on','in','as',
-    'box','additionally','particularly','thereafter','please','the','there','has','have',
-    'this','welcome','website','appendix','we','re',"we’re",'we re','should','be','com',
-    'rbc','at','from','ceo','appendices','endnotes','volunteerismappendices',
-    'is','ii','of','our'
+    'shall','among','best','would','like','see','needs','•','their','to','requires','within','may',
+    'lot','etc','b','with','without','pdfs','shows','tells','e','g','also','always','however','go','–',
+    'by','for','that','and','or','0c','meet','includes','could','example','examples','chapter','an','a',
+    'on','in','as','box','additionally','particularly','thereafter','please','the','there','has','have',
+    'this','welcome','website','appendix','we','re',"we’re",'we re','should','be','com','rbc','at','from',
+    'ceo','appendices','endnotes','is','ii','of','our'
 ])
 
 def remove_stopwords(text: str):
@@ -114,55 +97,33 @@ def remove_stopwords(text: str):
     words = sentence.split()
     return ' '.join([w.lower() for w in words if w.lower() not in custom_stopwords and not w.isdigit()])
 
-# ---------------- TF-IDF bigrams ----------------
 vectorizer = TfidfVectorizer(ngram_range=(2, 2))
 
-def extract_tfidf_keywords(text: str, top_n=5):
+def extract_tfidf_keywords(text: str, top_n=10):
     if not text or not text.strip():
         return []
     x = vectorizer.fit_transform([text])
     df_kw = pd.DataFrame(x.toarray(), columns=vectorizer.get_feature_names_out()).transpose()
     return df_kw.sort_values(by=0, ascending=False).head(top_n).index.tolist()
 
-# ---------------- Models + cache ----------------
+# ---- Model cache ----
 EMBED_MODEL = None
 KEYEXTRACTOR = None
-STANDARD_EMBEDDINGS = {}  # name -> tensor(1, dim)
+STANDARD_EMBEDDINGS = {}   # std_name -> tensor(1, dim)
 
 def get_models():
     global EMBED_MODEL, KEYEXTRACTOR
     if EMBED_MODEL is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logging.info(f"Loading model: {MODEL_NAME} on {device}")
-        EMBED_MODEL = SentenceTransformer(
-            MODEL_NAME,
-            device=device,
-            trust_remote_code=TRUST_REMOTE_CODE
-        )
+        EMBED_MODEL = SentenceTransformer(MODEL_NAME, device=device, trust_remote_code=TRUST_REMOTE_CODE)
         KEYEXTRACTOR = KeyBERT(EMBED_MODEL)
         logging.info("Model loaded.")
     return EMBED_MODEL, KEYEXTRACTOR
 
-def chunk_text_words(text: str, chunk_words: int):
-    words = text.split()
-    for i in range(0, len(words), chunk_words):
-        yield " ".join(words[i:i + chunk_words])
-
 def encode_text(model, text: str):
     if not text or not str(text).strip():
         return None
-
-    if USE_CHUNKING:
-        chunks = list(chunk_text_words(str(text), CHUNK_WORDS))
-        if not chunks:
-            return None
-        embs = []
-        for c in chunks:
-            emb = model.encode(c, convert_to_tensor=True, normalize_embeddings=True)
-            embs.append(emb)
-        mean_emb = torch.stack(embs).mean(dim=0)  # (dim,)
-        return mean_emb.unsqueeze(0)              # (1, dim)
-
     emb = model.encode(str(text), convert_to_tensor=True, normalize_embeddings=True)
     return emb.unsqueeze(0)
 
@@ -171,7 +132,6 @@ def build_standard_embeddings_if_needed():
     if STANDARD_EMBEDDINGS:
         return
     model, _ = get_models()
-
     tmp = {}
     for _, row in standards_df_copy.iterrows():
         name = str(row["Standards"]).strip()
@@ -183,12 +143,11 @@ def build_standard_embeddings_if_needed():
     STANDARD_EMBEDDINGS = tmp
     logging.info(f"Cached standard embeddings: {len(STANDARD_EMBEDDINGS)}")
 
-# ---------------- KeyBERT keywords ----------------
-def extract_contextual_keywords(text: str, top_n=5):
+def extract_contextual_keywords(text: str, top_n=10):
     if not text or not text.strip():
         return []
     _, keyextractor = get_models()
-    short_text = text[:MAX_KB_CHARS]  # keep fast
+    short_text = text[:MAX_KB_CHARS]  # keep fast on Azure
     results = keyextractor.extract_keywords(
         short_text,
         keyphrase_ngram_range=(2, 2),
@@ -197,17 +156,15 @@ def extract_contextual_keywords(text: str, top_n=5):
     )
     return [x[0] for x in results]
 
-def combined_keywords_str(ctx_list, tfidf_list):
-    return ", ".join([w for w in (ctx_list + tfidf_list) if w])
+def cosine_sim(a, b):
+    if a is None or b is None:
+        return 0.0
+    return float(F.cosine_similarity(a, b, dim=1).item())
 
-# ---------------- PDF reading ----------------
+# ---- PDF reading ----
 def read_pdf_text(path: str, num_header=6):
-    """
-    Reads all pages, returns (full_text, error_message)
-    """
     try:
         reader = PdfReader(path)
-
         if getattr(reader, "is_encrypted", False):
             try:
                 reader.decrypt("")
@@ -224,18 +181,15 @@ def read_pdf_text(path: str, num_header=6):
         if MAX_PDF_CHARS > 0:
             full = full[:MAX_PDF_CHARS]
         return full, None
-
     except Exception as e:
         logging.exception("PDF read failed")
         return "", f"Cannot read this PDF on the server. Error: {type(e).__name__}"
 
-# ---------------- Pub date detection ----------------
 MONTHS = (
     r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
     r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t)?(?:ember)?|Oct(?:ober)?|"
     r"Nov(?:ember)?|Dec(?:ember)?)"
 )
-
 def detect_publication_date(text: str):
     if not text:
         return ""
@@ -245,7 +199,6 @@ def detect_publication_date(text: str):
     m = re.search(r"\b20\d{2}\b", text)
     return m.group(0) if m else ""
 
-# ---------------- Standard lookup ----------------
 def lookup_standard(std_name: str):
     row = standards_df_copy.loc[standards_df_copy["Standards"].astype(str).str.strip() == std_name]
     if row.empty:
@@ -259,13 +212,6 @@ def lookup_standard(std_name: str):
         "combined": r["Combined Keywords Display"],
     }
 
-# ---------------- Similarity ----------------
-def cosine_sim(a, b):
-    if a is None or b is None:
-        return 0.0
-    return float(F.cosine_similarity(a, b, dim=1).item())
-
-# ---------------- Routes ----------------
 @app.route("/", methods=["GET"])
 def home():
     return render_template(
@@ -274,7 +220,6 @@ def home():
         selected=None,
         result=None,
         std_info=None,
-        pdf_text_preview="",
         error=None,
         message=None
     )
@@ -285,93 +230,62 @@ def analyze():
     pdf_file = request.files.get("bank_pdf")
 
     if not std:
-        return render_template(
-            "index.html",
-            standards=standards_list,
-            selected=None,
-            result=None,
-            std_info=None,
-            pdf_text_preview="",
-            error="Please select a standard.",
-            message=None
-        )
+        return render_template("index.html", standards=standards_list, selected=None,
+                               result=None, std_info=None, error="Please select a standard.", message=None)
 
     if not pdf_file or pdf_file.filename == "":
-        return render_template(
-            "index.html",
-            standards=standards_list,
-            selected=std,
-            result=None,
-            std_info=None,
-            pdf_text_preview="",
-            error="Please upload a Bank ESG report (PDF).",
-            message=None
-        )
+        return render_template("index.html", standards=standards_list, selected=std,
+                               result=None, std_info=None, error="Please upload a Bank ESG PDF.", message=None)
 
     ext = os.path.splitext(pdf_file.filename)[1].lower()
     if ext not in ALLOWED_EXT:
-        return render_template(
-            "index.html",
-            standards=standards_list,
-            selected=std,
-            result=None,
-            std_info=None,
-            pdf_text_preview="",
-            error="Only .pdf files are accepted.",
-            message=None
-        )
+        return render_template("index.html", standards=standards_list, selected=std,
+                               result=None, std_info=None, error="Only .pdf is accepted.", message=None)
 
     fname = secure_filename(pdf_file.filename)
     fpath = os.path.join(app.config["UPLOAD_FOLDER"], fname)
 
-    pdf_preview = ""
     try:
         pdf_file.save(fpath)
 
         full_text, pdf_err = read_pdf_text(fpath, num_header=6)
-        pdf_preview = (full_text or "").strip()[:PREVIEW_CHARS]
-
         if pdf_err:
-            return render_template(
-                "index.html",
-                standards=standards_list,
-                selected=std,
-                result=None,
-                std_info=None,
-                pdf_text_preview=pdf_preview,
-                error=pdf_err,
-                message=None
-            )
+            return render_template("index.html", standards=standards_list, selected=std,
+                                   result=None, std_info=None, error=pdf_err, message=None)
 
-        # Build cache once (fast for repeated requests)
+        # preview MUST exist because your HTML uses result.preview
+        preview = (full_text or "").strip()[:PREVIEW_CHARS]
+
+        # cache standards + load models
         build_standard_embeddings_if_needed()
         model, _ = get_models()
 
         bank_pub_date = detect_publication_date(full_text)
 
-        # Keywords
+        # keywords (comma-separated strings for HTML split(','))
         ns_text = remove_stopwords(full_text)
-        tfidf_list = extract_tfidf_keywords(ns_text, top_n=5)
-        contextual_list = extract_contextual_keywords(full_text, top_n=5)
+        tfidf_list = extract_tfidf_keywords(ns_text, top_n=10)
+        contextual_list = extract_contextual_keywords(full_text, top_n=10)
 
-        combined_str = combined_keywords_str(contextual_list, tfidf_list)
+        combined_list = contextual_list + tfidf_list
+        combined_list = [k.strip() for k in combined_list if k and k.strip()]
+        combined_str = ", ".join(combined_list)
 
-        # Embeddings
         bank_emb = encode_text(model, combined_str)
         std_emb = STANDARD_EMBEDDINGS.get(std)
 
-        sim = cosine_sim(bank_emb, std_emb)
-        sim_pct = round(sim * 100, 1)
+        similarity = cosine_sim(bank_emb, std_emb)
 
         std_info = lookup_standard(std)
         result = {
             "filename": fname,
             "standard": std,
             "bank_pub_date": bank_pub_date,
-            "bank_tfidf": "\n".join(tfidf_list),
-            "bank_contextual": "\n".join(contextual_list),
-            "bank_combined": "\n".join([w.strip() for w in combined_str.split(",") if w.strip()]),
-            "similarity_pct": sim_pct,
+            "bank_tfidf": ", ".join(tfidf_list),
+            "bank_contextual": ", ".join(contextual_list),
+            "bank_combined": ", ".join(combined_list),
+            "similarity_score": similarity,   # your HTML uses result.similarity_score
+            "preview": preview                # your HTML uses result.preview
         }
 
         return render_template(
@@ -380,7 +294,6 @@ def analyze():
             selected=std,
             result=result,
             std_info=std_info,
-            pdf_text_preview=pdf_preview,
             error=None,
             message=None
         )
@@ -393,13 +306,11 @@ def analyze():
             selected=std,
             result=None,
             std_info=None,
-            pdf_text_preview=pdf_preview,
-            error=f"Server error: {type(e).__name__}. Please try a smaller PDF or increase timeout.",
+            error=f"Server error: {type(e).__name__}. Please check Log stream.",
             message=None
         )
 
     finally:
-        # Always delete uploaded PDF after processing
         try:
             if os.path.exists(fpath):
                 os.remove(fpath)

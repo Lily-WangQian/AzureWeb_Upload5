@@ -4,22 +4,6 @@
   <meta charset="UTF-8" />
   <title>Bank and Standard Similarity Comparator</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-  <style>
-    pre.preview {
-      white-space: pre-wrap;
-      background: #f8f9fa;
-      border: 1px solid #ddd;
-      padding: 12px;
-      border-radius: 6px;
-      max-height: 280px;
-      overflow: auto;
-      font-size: 0.95rem;
-    }
-    pre.kw {
-      white-space: pre-wrap;
-      margin: 0;
-    }
-  </style>
 </head>
 
 <body class="bg-light p-4">
@@ -33,39 +17,67 @@
       <div class="alert alert-info">{{ message }}</div>
     {% endif %}
 
-    <form class="row g-3" method="POST" action="/analyze" enctype="multipart/form-data">
+    <!-- Form -->
+    <form id="analyze-form" class="row g-3" method="POST" action="/analyze" enctype="multipart/form-data">
+
+      <!-- Upload section -->
       <div class="col-12 col-lg-6">
         <label class="form-label">Upload Bank ESG PDF:</label>
         <input type="file" name="bank_pdf" class="form-control" accept="application/pdf" required>
         <div class="form-text">Only .pdf is accepted.</div>
       </div>
 
+      <!-- Standard selector -->
       <div class="col-12 col-lg-6">
         <label class="form-label">Select Standard:</label>
-        <select name="standard" class="form-select" required>
-          <option value="">-- Select Standard --</option>
-          {% for s in standards %}
-            <option value="{{ s }}" {% if selected == s %}selected{% endif %}>{{ s }}</option>
-          {% endfor %}
-        </select>
-      </div>
-
-      <div class="col-12">
-        <button class="btn btn-primary w-100" type="submit">Calculate</button>
+        <div class="d-grid gap-2 d-lg-flex align-items-lg-end">
+          <select name="standard" class="form-select" required>
+            <option value="">-- Select Standard --</option>
+            {% for std in standards %}
+              <option value="{{ std }}" {% if selected == std %}selected{% endif %}>{{ std }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-primary ms-lg-2" type="submit">Calculate</button>
+        </div>
       </div>
     </form>
 
-    {% if std_info %}
-      <hr class="my-4">
-      <h3>Selected Standard Details</h3>
-      <div class="table-responsive">
+    <!-- Processing Progress Bar -->
+    <div id="processing-container" class="mt-4" style="display: none;">
+      <label class="form-label">Processing your file…</label>
+      <div class="progress">
+        <div
+          id="processing-bar"
+          class="progress-bar progress-bar-striped progress-bar-animated"
+          role="progressbar"
+          style="width: 0%;"
+          aria-valuemin="0"
+          aria-valuemax="100">
+          0%
+        </div>
+      </div>
+      <small class="text-muted">Please wait. The analysis may take a little while.</small>
+    </div>
+
+    {% if result %}
+    <div class="mt-5 p-4 bg-white rounded shadow-sm">
+
+      <h4 class="mb-3">Result</h4>
+      <p><strong>Uploaded file:</strong> {{ result.filename }}</p>
+      <p><strong>Selected standard:</strong> {{ result.standard }}</p>
+
+      {% if std_info %}
+      <hr>
+      <h5 class="mb-3">Selected Standard Details</h5>
+
+      <div class="table-responsive mb-4">
         <table class="table table-bordered align-middle">
           <thead class="table-success">
             <tr>
               <th>Standard</th>
               <th>Publication Date</th>
-              <th>TFIDF Keywords</th>
-              <th>Contextual Keywords</th>
+              <th>TFIDF Keywords (Top 10)</th>
+              <th>Contextual Keywords (Top 10)</th>
               <th>Combined Keywords</th>
             </tr>
           </thead>
@@ -73,19 +85,43 @@
             <tr>
               <td>{{ std_info.standard }}</td>
               <td>{{ std_info.pub_date }}</td>
-              <td><pre class="kw">{{ std_info.tfidf }}</pre></td>
-              <td><pre class="kw">{{ std_info.contextual }}</pre></td>
-              <td><pre class="kw">{{ std_info.combined }}</pre></td>
+
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in (std_info.tfidf or "").split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}<li>{{ k }}</li>{% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in (std_info.contextual or "").split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}<li>{{ k }}</li>{% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in (std_info.combined or "").split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}<li>{{ k }}</li>{% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
             </tr>
           </tbody>
         </table>
       </div>
-    {% endif %}
+      {% endif %}
 
-    {% if result %}
-      <hr class="my-4">
-      <h3>Uploaded Bank Report Analysis</h3>
-      <div class="table-responsive">
+      <h5 class="mb-3">Uploaded Bank Report Analysis</h5>
+
+      <div class="table-responsive mb-4">
         <table class="table table-bordered align-middle">
           <thead class="table-info">
             <tr>
@@ -100,22 +136,80 @@
             <tr>
               <td>{{ result.filename }}</td>
               <td>{{ result.bank_pub_date }}</td>
-              <td><pre class="kw">{{ result.bank_tfidf }}</pre></td>
-              <td><pre class="kw">{{ result.bank_contextual }}</pre></td>
-              <td><pre class="kw">{{ result.bank_combined }}</pre></td>
+
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in (result.bank_tfidf or "").split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}<li>{{ k }}</li>{% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in (result.bank_contextual or "").split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}<li>{{ k }}</li>{% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in (result.bank_combined or "").split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}<li>{{ k }}</li>{% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
             </tr>
           </tbody>
         </table>
       </div>
 
-      <hr class="my-3">
-      <h4>Embedding-based Similarity Score (Combined Keywords)</h4>
-      <p><strong>Similarity:</strong> <span class="badge bg-primary">{{ result.similarity_pct }}%</span></p>
-    {% endif %}
+      <hr>
+      <h5>Embedding-based Similarity Score (Combined Keywords)</h5>
+      <p>
+        Similarity:
+        <span class="badge bg-primary">
+          {{ (result.similarity_score * 100) | round(2) }}%
+        </span>
+      </p>
 
-    <hr class="my-4">
-    <h3>PDF Text Preview</h3>
-    <pre class="preview">{{ pdf_text_preview or "No preview available." }}</pre>
+      <hr>
+      <h5>PDF Text Preview</h5>
+      <pre style="white-space: pre-wrap;">{{ result.preview }}</pre>
+
+    </div>
+    {% endif %}
   </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      const form = document.getElementById("analyze-form");
+      const processingContainer = document.getElementById("processing-container");
+      const processingBar = document.getElementById("processing-bar");
+
+      if (!form || !processingContainer || !processingBar) return;
+
+      form.addEventListener("submit", function () {
+        processingContainer.style.display = "block";
+
+        let percent = 0;
+        const interval = setInterval(function () {
+          if (percent < 99) {
+            percent += 1;
+            processingBar.style.width = percent + "%";
+            processingBar.textContent = percent + "%";
+          } else {
+            clearInterval(interval);
+          }
+        }, 200);
+      });
+    });
+  </script>
+
 </body>
 </html>
