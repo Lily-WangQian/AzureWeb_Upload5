@@ -18,11 +18,13 @@ jobs:
         with:
           python-version: "3.11"
 
+      # (Optional but helpful) sanity check
       - name: Show files
         run: |
           ls -la
           python --version
 
+      # Create a zip of SOURCE CODE (not venv)
       - name: Zip source
         run: |
           zip -r release.zip . \
@@ -36,6 +38,6 @@ jobs:
       - name: Deploy to Azure Web App (ZIP Deploy)
         uses: azure/webapps-deploy@v3
         with:
-          app-name: "lily-bank-std-comparator-v5"
+          app-name: "lily-bank-std-comparator-v4"
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }}
           package: release.zip
