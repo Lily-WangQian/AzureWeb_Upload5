@@ -5,6 +5,7 @@ import re
 import string
 import ast
 import logging
+from collections import defaultdict
 
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -25,15 +26,36 @@ app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 CSV_PATH = "standards_keywords.csv"
 ALLOWED_EXT = {".pdf"}
 
-# ---- Azure-safe defaults (override in Azure App Settings later) ----
+# ---------------- Azure-friendly environment variables ----------------
 MODEL_NAME = os.environ.get("MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
 TRUST_REMOTE_CODE = os.environ.get("TRUST_REMOTE_CODE", "false").lower() == "true"
 
-MAX_PDF_CHARS = int(os.environ.get("MAX_PDF_CHARS", "120000"))   # total text to process
-MAX_KB_CHARS  = int(os.environ.get("MAX_KB_CHARS", "40000"))     # KeyBERT input length
-PREVIEW_CHARS = int(os.environ.get("PREVIEW_CHARS", "8000"))     # show preview on page
+# IMPORTANT: set MAX_PDF_CHARS=0 on Azure => process ENTIRE PDF (no truncation)
+MAX_PDF_CHARS = int(os.environ.get("MAX_PDF_CHARS", "0"))  # 0 = unlimited
+PREVIEW_CHARS = int(os.environ.get("PREVIEW_CHARS", "8000"))
 
-# ---- Load standards CSV ----
+USE_CHUNKING = os.environ.get("USE_CHUNKING", "true").lower() == "true"
+
+# Embedding chunking (full-text but done in pieces)
+EMB_CHUNK_CHARS = int(os.environ.get("EMB_CHUNK_CHARS", "3500"))
+EMB_CHUNK_OVERLAP = int(os.environ.get("EMB_CHUNK_OVERLAP", "300"))
+
+# KeyBERT chunking (keyword extraction in pieces)
+KB_CHUNK_CHARS = int(os.environ.get("KB_CHUNK_CHARS", "6000"))
+KB_CHUNK_OVERLAP = int(os.environ.get("KB_CHUNK_OVERLAP", "400"))
+KB_TOPN_PER_CHUNK = int(os.environ.get("KB_TOPN_PER_CHUNK", "20"))
+
+# 0 = unlimited chunks; set to e.g. 80 if you ever need a safety cap
+MAX_CHUNKS = int(os.environ.get("MAX_CHUNKS", "0"))
+
+# KeyBERT input length guard (still ok because we chunk)
+MAX_KB_CHARS = int(os.environ.get("MAX_KB_CHARS", "40000"))
+
+# Top keywords to show
+TOP_TFIDF_N = int(os.environ.get("TOP_TFIDF_N", "5"))
+TOP_CTX_N = int(os.environ.get("TOP_CTX_N", "5"))
+
+# ---------------- Load standards CSV ----------------
 standards_df = pd.read_csv(CSV_PATH, dtype=str, encoding="utf-8")
 standards_df.columns = standards_df.columns.str.strip()
 
@@ -75,12 +97,12 @@ standards_df_copy["TFIDF Keywords List"] = standards_df_copy["TFIDF Keywords"].a
 standards_df_copy["Contextual Keywords List"] = standards_df_copy["Contextual Keywords"].apply(parse_keywords)
 standards_df_copy["Combined Keywords List"] = standards_df_copy["Combined Keywords"].apply(parse_keywords)
 
-# IMPORTANT: keep comma-separated strings because your HTML uses split(',')
+# Keep comma-separated strings because HTML uses split(',')
 standards_df_copy["TFIDF Keywords Display"] = standards_df_copy["TFIDF Keywords List"].apply(lambda lst: ", ".join(lst))
 standards_df_copy["Contextual Keywords Display"] = standards_df_copy["Contextual Keywords List"].apply(lambda lst: ", ".join(lst))
 standards_df_copy["Combined Keywords Display"] = standards_df_copy["Combined Keywords List"].apply(lambda lst: ", ".join(lst))
 
-# ---- Stopwords + TFIDF ----
+# ---------------- Stopwords + TFIDF ----------------
 custom_stopwords = set([
     'shall','among','best','would','like','see','needs','•','their','to','requires','within','may',
     'lot','etc','b','with','without','pdfs','shows','tells','e','g','also','always','however','go','–',
@@ -97,19 +119,57 @@ def remove_stopwords(text: str):
     words = sentence.split()
     return ' '.join([w.lower() for w in words if w.lower() not in custom_stopwords and not w.isdigit()])
 
+# Use bigrams like your current approach
 vectorizer = TfidfVectorizer(ngram_range=(2, 2))
 
-def extract_tfidf_keywords(text: str, top_n=5):
-    if not text or not text.strip():
+def chunk_text(text: str, chunk_chars: int, overlap: int, max_chunks: int = 0):
+    """
+    Chunk by characters with overlap.
+    max_chunks=0 => unlimited
+    """
+    if not text:
         return []
-    x = vectorizer.fit_transform([text])
-    df_kw = pd.DataFrame(x.toarray(), columns=vectorizer.get_feature_names_out()).transpose()
-    return df_kw.sort_values(by=0, ascending=False).head(top_n).index.tolist()
+    if chunk_chars <= 0:
+        return [text]
 
-# ---- Model cache ----
+    chunks = []
+    start = 0
+    n = len(text)
+    while start < n:
+        end = min(n, start + chunk_chars)
+        chunks.append(text[start:end])
+        if end == n:
+            break
+        start = max(0, end - overlap)
+        if max_chunks and len(chunks) >= max_chunks:
+            break
+    return chunks
+
+def extract_tfidf_keywords_fulltext(text_no_stopwords: str, top_n: int):
+    """
+    Full-text TFIDF without truncation:
+    Fit TFIDF over chunks and sum weights across chunks.
+    """
+    if not text_no_stopwords or not text_no_stopwords.strip():
+        return []
+
+    chunks = chunk_text(text_no_stopwords, chunk_chars=8000, overlap=300, max_chunks=MAX_CHUNKS)
+    if not chunks:
+        chunks = [text_no_stopwords]
+
+    X = vectorizer.fit_transform(chunks)  # shape: (n_chunks, n_features)
+    # Sum weights across chunks -> overall importance
+    weights = X.sum(axis=0)               # shape: (1, n_features)
+    weights = weights.A1                  # numpy array
+
+    feature_names = vectorizer.get_feature_names_out()
+    top_idx = weights.argsort()[::-1][:top_n]
+    return [feature_names[i] for i in top_idx if weights[i] > 0]
+
+# ---------------- Model cache ----------------
 EMBED_MODEL = None
 KEYEXTRACTOR = None
-STANDARD_EMBEDDINGS = {}   # std_name -> tensor(1, dim)
+STANDARD_EMBEDDINGS = {}  # std_name -> tensor(1, dim)
 
 def get_models():
     global EMBED_MODEL, KEYEXTRACTOR
@@ -121,11 +181,36 @@ def get_models():
         logging.info("Model loaded.")
     return EMBED_MODEL, KEYEXTRACTOR
 
-def encode_text(model, text: str):
+def cosine_sim(a, b):
+    if a is None or b is None:
+        return 0.0
+    return float(F.cosine_similarity(a, b, dim=1).item())
+
+def encode_fulltext_with_chunking(model, text: str):
+    """
+    Encode entire PDF text by chunking + mean pooling.
+    Avoids passing a massive string into the embedding model.
+    """
     if not text or not str(text).strip():
         return None
-    emb = model.encode(str(text), convert_to_tensor=True, normalize_embeddings=True)
-    return emb.unsqueeze(0)
+
+    if not USE_CHUNKING:
+        emb = model.encode(text, convert_to_tensor=True, normalize_embeddings=True)
+        return emb.unsqueeze(0)
+
+    chunks = chunk_text(text, EMB_CHUNK_CHARS, EMB_CHUNK_OVERLAP, MAX_CHUNKS)
+    if not chunks:
+        return None
+
+    # Batch encode chunks
+    chunk_embs = model.encode(chunks, convert_to_tensor=True, normalize_embeddings=True)
+    if chunk_embs is None or len(chunk_embs) == 0:
+        return None
+
+    # Mean pool then normalize
+    pooled = chunk_embs.mean(dim=0, keepdim=True)
+    pooled = F.normalize(pooled, p=2, dim=1)
+    return pooled
 
 def build_standard_embeddings_if_needed():
     global STANDARD_EMBEDDINGS
@@ -137,31 +222,55 @@ def build_standard_embeddings_if_needed():
         name = str(row["Standards"]).strip()
         combined = str(row["Combined Keywords"]).strip()
         if name and combined:
-            emb = encode_text(model, combined)
-            if emb is not None:
-                tmp[name] = emb
+            # Standards strings are small, no need to chunk
+            emb = model.encode(combined, convert_to_tensor=True, normalize_embeddings=True)
+            tmp[name] = emb.unsqueeze(0)
     STANDARD_EMBEDDINGS = tmp
     logging.info(f"Cached standard embeddings: {len(STANDARD_EMBEDDINGS)}")
 
-def extract_contextual_keywords(text: str, top_n=5):
+def extract_contextual_keywords_fulltext(text: str, top_n: int):
+    """
+    Extract contextual keywords from ENTIRE PDF by chunking and merging scores.
+    """
     if not text or not text.strip():
         return []
+
     _, keyextractor = get_models()
-    short_text = text[:MAX_KB_CHARS]  # keep fast on Azure
-    results = keyextractor.extract_keywords(
-        short_text,
-        keyphrase_ngram_range=(2, 2),
-        top_n=top_n,
-        stop_words="english"
-    )
-    return [x[0] for x in results]
 
-def cosine_sim(a, b):
-    if a is None or b is None:
-        return 0.0
-    return float(F.cosine_similarity(a, b, dim=1).item())
+    if not USE_CHUNKING:
+        short_text = text[:MAX_KB_CHARS] if MAX_KB_CHARS > 0 else text
+        results = keyextractor.extract_keywords(
+            short_text,
+            keyphrase_ngram_range=(2, 2),
+            top_n=top_n,
+            stop_words="english"
+        )
+        return [x[0] for x in results]
 
-# ---- PDF reading ----
+    chunks = chunk_text(text, KB_CHUNK_CHARS, KB_CHUNK_OVERLAP, MAX_CHUNKS)
+    if not chunks:
+        return []
+
+    best_score = defaultdict(float)
+
+    for ch in chunks:
+        # Extra guard (rarely needed because we already chunk)
+        ch2 = ch[:MAX_KB_CHARS] if MAX_KB_CHARS > 0 else ch
+        results = keyextractor.extract_keywords(
+            ch2,
+            keyphrase_ngram_range=(2, 2),
+            top_n=KB_TOPN_PER_CHUNK,
+            stop_words="english"
+        )
+        for phrase, score in results:
+            phrase = (phrase or "").strip()
+            if phrase:
+                best_score[phrase] = max(best_score[phrase], float(score))
+
+    ranked = sorted(best_score.items(), key=lambda x: x[1], reverse=True)
+    return [p for p, _ in ranked[:top_n]]
+
+# ---------------- PDF reading (NO truncation when MAX_PDF_CHARS=0) ----------------
 def read_pdf_text(path: str, num_header=6):
     try:
         reader = PdfReader(path)
@@ -178,8 +287,11 @@ def read_pdf_text(path: str, num_header=6):
             pages.append(" ".join(words[num_header:]))
 
         full = " ".join(pages)
+
+        # MAX_PDF_CHARS=0 => unlimited
         if MAX_PDF_CHARS > 0:
             full = full[:MAX_PDF_CHARS]
+
         return full, None
     except Exception as e:
         logging.exception("PDF read failed")
@@ -212,6 +324,7 @@ def lookup_standard(std_name: str):
         "combined": r["Combined Keywords Display"],
     }
 
+# ---------------- Routes ----------------
 @app.route("/", methods=["GET"])
 def home():
     return render_template(
@@ -253,25 +366,25 @@ def analyze():
             return render_template("index.html", standards=standards_list, selected=std,
                                    result=None, std_info=None, error=pdf_err, message=None)
 
-        # preview MUST exist because your HTML uses result.preview
-        preview = (full_text or "").strip()[:PREVIEW_CHARS]
+        preview = (full_text or "").strip()[:PREVIEW_CHARS] if PREVIEW_CHARS > 0 else ""
 
-        # cache standards + load models
         build_standard_embeddings_if_needed()
         model, _ = get_models()
 
         bank_pub_date = detect_publication_date(full_text)
 
-        # keywords (comma-separated strings for HTML split(','))
+        # ---- FULL TEXT processing (chunked) ----
         ns_text = remove_stopwords(full_text)
-        tfidf_list = extract_tfidf_keywords(ns_text, top_n=5)
-        contextual_list = extract_contextual_keywords(full_text, top_n=5)
+        tfidf_list = extract_tfidf_keywords_fulltext(ns_text, top_n=TOP_TFIDF_N)
+        contextual_list = extract_contextual_keywords_fulltext(full_text, top_n=TOP_CTX_N)
 
-        combined_list = contextual_list + tfidf_list
-        combined_list = [k.strip() for k in combined_list if k and k.strip()]
+        combined_list = [k.strip() for k in (contextual_list + tfidf_list) if k and k.strip()]
         combined_str = ", ".join(combined_list)
 
-        bank_emb = encode_text(model, combined_str)
+        # bank embedding uses ENTIRE PDF via chunking+pooling
+        bank_emb = encode_fulltext_with_chunking(model, full_text)
+
+        # standard embedding uses cached combined keywords
         std_emb = STANDARD_EMBEDDINGS.get(std)
 
         similarity = cosine_sim(bank_emb, std_emb)
@@ -283,9 +396,9 @@ def analyze():
             "bank_pub_date": bank_pub_date,
             "bank_tfidf": ", ".join(tfidf_list),
             "bank_contextual": ", ".join(contextual_list),
-            "bank_combined": ", ".join(combined_list),
-            "similarity_score": similarity,   # your HTML uses result.similarity_score
-            "preview": preview                # your HTML uses result.preview
+            "bank_combined": combined_str,
+            "similarity_score": similarity,
+            "preview": preview
         }
 
         return render_template(
