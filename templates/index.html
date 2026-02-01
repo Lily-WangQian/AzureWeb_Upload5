@@ -13,97 +13,231 @@
     {% if error %}
       <div class="alert alert-danger">{{ error }}</div>
     {% endif %}
+    {% if message %}
+      <div class="alert alert-info">{{ message }}</div>
+    {% endif %}
 
-    <form class="row g-3" method="POST" action="/analyze" enctype="multipart/form-data">
+    <!-- Form -->
+    <form id="analyze-form" class="row g-3" method="POST" action="/analyze" enctype="multipart/form-data">
+      
+      <!-- Upload section -->
       <div class="col-12 col-lg-6">
-        <label class="form-label fw-bold">Upload Bank ESG PDF:</label>
-        <input class="form-control" type="file" name="bank_pdf" accept=".pdf" required>
+        <label class="form-label">Upload Bank ESG PDF:</label>
+        <input type="file" name="bank_pdf" class="form-control" accept="application/pdf" required>
         <div class="form-text">Only .pdf is accepted.</div>
       </div>
 
-      <div class="col-12 col-lg-5">
-        <label class="form-label fw-bold">Select Standard:</label>
+      <!-- Standard selector -->
+      <div class="col-12 col-lg-6">
+        <label class="form-label">Select Standard:</label>
+        <div class="d-grid gap-2 d-lg-flex align-items-lg-end">
+          <select name="standard" class="form-select" required>
+            <option value="">-- Select Standard --</option>
 
-        {% if standards and standards|length > 0 %}
-          <select class="form-select" name="standard" required>
-            {% for s in standards %}
-              <option value="{{ s }}" {% if selected == s %}selected{% endif %}>{{ s }}</option>
+            {% for std in standards %}
+              {% if selected == std %}
+                <option value="{{ std }}" selected="selected">{{ std }}</option>
+              {% else %}
+                <option value="{{ std }}">{{ std }}</option>
+              {% endif %}
             {% endfor %}
-          </select>
-        {% else %}
-          <div class="alert alert-warning mb-0">
-            No standards found. Please check <b>standards_keywords.csv</b> is deployed correctly.
-          </div>
-        {% endif %}
-      </div>
 
-      <div class="col-12 col-lg-1 d-grid align-items-end">
-        <button class="btn btn-primary" type="submit" {% if not standards or standards|length == 0 %}disabled{% endif %}>
-          Calculate
-        </button>
+          </select>
+          <button class="btn btn-primary ms-lg-2" type="submit">Calculate</button>
+        </div>
       </div>
     </form>
 
-    {% if result %}
-      <hr class="my-4">
-
-      <h4>Results</h4>
-      <ul class="list-group mb-3">
-        <li class="list-group-item"><b>File:</b> {{ result.filename }}</li>
-        <li class="list-group-item"><b>Standard:</b> {{ result.standard }}</li>
-        <li class="list-group-item"><b>Detected Bank Date:</b> {{ result.bank_pub_date }}</li>
-        <li class="list-group-item"><b>Similarity Score:</b> {{ "%.4f"|format(result.similarity_score) }}</li>
-      </ul>
-
-      <div class="row g-3">
-        <div class="col-12 col-lg-6">
-          <div class="card">
-            <div class="card-header fw-bold">Bank TF-IDF Keywords</div>
-            <div class="card-body">
-              {{ result.bank_tfidf if result.bank_tfidf else "(empty)" }}
-            </div>
-          </div>
-        </div>
-
-        <div class="col-12 col-lg-6">
-          <div class="card">
-            <div class="card-header fw-bold">Bank Contextual Keywords (KeyBERT)</div>
-            <div class="card-body">
-              {{ result.bank_contextual if result.bank_contextual else "(empty)" }}
-            </div>
-          </div>
-        </div>
-
-        <div class="col-12">
-          <div class="card">
-            <div class="card-header fw-bold">Bank Combined Keywords</div>
-            <div class="card-body">
-              {{ result.bank_combined if result.bank_combined else "(empty)" }}
-            </div>
-          </div>
-        </div>
-
-        <div class="col-12">
-          <div class="card">
-            <div class="card-header fw-bold">PDF Text Preview</div>
-            <div class="card-body">
-              <pre style="white-space: pre-wrap;">{{ result.preview if result.preview else "(no preview)" }}</pre>
-            </div>
-          </div>
+    <!-- Processing Progress Bar -->
+    <div id="processing-container" class="mt-4" style="display: none;">
+      <label class="form-label">Processing your file…</label>
+      <div class="progress">
+        <div
+          id="processing-bar"
+          class="progress-bar progress-bar-striped progress-bar-animated"
+          role="progressbar"
+          style="width: 0%;"
+          aria-valuemin="0"
+          aria-valuemax="100">
+          0%
         </div>
       </div>
+      <small class="text-muted">Please wait. The analysis may take a little while.</small>
+    </div>
+
+    {% if result %}
+    <div class="mt-5 p-4 bg-white rounded shadow-sm">
+
+      <h4 class="mb-3">Result</h4>
+      <p><strong>Uploaded file:</strong> {{ result.filename }}</p>
+      <p><strong>Selected standard:</strong> {{ result.standard }}</p>
 
       {% if std_info %}
-        <hr class="my-4">
-        <h4>Standard Info</h4>
-        <ul class="list-group">
-          <li class="list-group-item"><b>Publication Date:</b> {{ std_info.pub_date }}</li>
-          <li class="list-group-item"><b>TF-IDF Keywords:</b> {{ std_info.tfidf if std_info.tfidf else "(empty)" }}</li>
-          <li class="list-group-item"><b>Contextual Keywords:</b> {{ std_info.contextual if std_info.contextual else "(empty)" }}</li>
-          <li class="list-group-item"><b>Combined Keywords:</b> {{ std_info.combined if std_info.combined else "(empty)" }}</li>
-        </ul>
+      <hr>
+      <h5 class="mb-3">Selected Standard Details</h5>
+
+      <div class="table-responsive mb-4">
+        <table class="table table-bordered align-middle">
+          <thead class="table-success">
+            <tr>
+              <th>Standard</th>
+              <th>Publication Date</th>
+              <th>TFIDF Keywords</th>
+              <th>Contextual Keywords</th>
+              <th>Combined Keywords</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{{ std_info.standard }}</td>
+              <td>{{ std_info.pub_date }}</td>
+
+              <!-- TFIDF -->
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in std_info.tfidf.split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
+              <!-- Contextual -->
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in std_info.contextual.split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
+              <!-- Combined -->
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in std_info.combined.split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
+            </tr>
+          </tbody>
+        </table>
+      </div>
       {% endif %}
+
+      {% if result.bank_pub_date or result.bank_tfidf or result.bank_contextual or result.bank_combined %}
+      <h5 class="mb-3">Uploaded Bank Report Analysis</h5>
+
+      <div class="table-responsive mb-4">
+        <table class="table table-bordered align-middle">
+          <thead class="table-info">
+            <tr>
+              <th>Standard / Bank Report</th>
+              <th>Publication Date</th>
+              <th>TFIDF Keywords</th>
+              <th>Contextual Keywords</th>
+              <th>Combined Keywords</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{{ result.filename }}</td>
+              <td>{{ result.bank_pub_date }}</td>
+
+              <!-- TFIDF -->
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in result.bank_tfidf.split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
+              <!-- Contextual -->
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in result.bank_contextual.split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+
+              <!-- Combined -->
+              <td>
+                <ul class="mb-0 ps-3">
+                  {% for kw in result.bank_combined.split(',') %}
+                    {% set k = kw.strip() %}
+                    {% if k %}
+                      <li>{{ k }}</li>
+                    {% endif %}
+                  {% endfor %}
+                </ul>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% if result.similarity_score is not none %}
+      <hr>
+      <h5>Embedding-based Similarity Score (Combined Keywords)</h5>
+      <p>
+        Similarity:
+        <span class="badge bg-primary">
+          {{ (result.similarity_score * 100) | round(2) }}%
+        </span>
+      </p>
+      {% endif %}
+
+      <hr>
+      <h5>PDF Text Preview</h5>
+      <pre style="white-space: pre-wrap;">{{ result.preview }}</pre>
+
+    </div>
     {% endif %}
   </div>
+
+  <!-- Progress bar script -->
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      const form = document.getElementById("analyze-form");
+      const processingContainer = document.getElementById("processing-container");
+      const processingBar = document.getElementById("processing-bar");
+
+      if (!form || !processingContainer || !processingBar) return;
+
+      form.addEventListener("submit", function () {
+        processingContainer.style.display = "block";
+
+        let percent = 0;
+        const interval = setInterval(function () {
+          if (percent < 99) {
+            percent += 1;
+            processingBar.style.width = percent + "%";
+            processingBar.textContent = percent + "%";
+          } else {
+            clearInterval(interval);
+          }
+        }, 200);
+      });
+    });
+  </script>
+
 </body>
 </html>
