@@ -27,8 +27,8 @@ CSV_PATH = "standards_keywords.csv"
 ALLOWED_EXT = {".pdf"}
 
 # ---------------- Azure-friendly environment variables ----------------
-MODEL_NAME = os.environ.get("MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
-TRUST_REMOTE_CODE = os.environ.get("TRUST_REMOTE_CODE", "false").lower() == "true"
+MODEL_NAME = os.environ.get("MODEL_NAME", "Alibaba-NLP/gte-large-en-v1.5")
+TRUST_REMOTE_CODE = os.environ.get("TRUST_REMOTE_CODE", "true").lower() == "true"
 
 # IMPORTANT: set MAX_PDF_CHARS=0 on Azure => process ENTIRE PDF (no truncation)
 MAX_PDF_CHARS = int(os.environ.get("MAX_PDF_CHARS", "0"))  # 0 = unlimited
