@@ -6,3 +6,4 @@ uploads/
 .env
 .DS_Store
 .ipynb_checkpoints/
+release.zip

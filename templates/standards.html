@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-home" href="{{ url_for('home') }}">← Back to Home</a>
+
+<div class="container sra-container">
+  <h2 class="mb-3">Standards</h2>
+
+  <input id="stdSearch" class="form-control mb-3" placeholder="Search standards..." />
+
+  <div class="table-responsive">
+    <table class="table table-bordered align-middle" id="stdTable">
+      <thead class="table-light">
+        <tr>
+          <th style="width:60px;">#</th>
+          <th>Standard Name</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in standards %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td>{{ s }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  const input = document.getElementById("stdSearch");
+  const table = document.getElementById("stdTable");
+  input.addEventListener("keyup", function () {
+    const filter = input.value.toLowerCase();
+    const rows = table.getElementsByTagName("tr");
+    for (let i = 1; i < rows.length; i++) {
+      const td = rows[i].getElementsByTagName("td")[1];
+      if (!td) continue;
+      rows[i].style.display = td.textContent.toLowerCase().includes(filter) ? "" : "none";
+    }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container sra-container">
+  <section class="faq" aria-labelledby="faq-title">
+    <h2 id="faq-title">Frequently Asked Questions</h2>
+
+    <h3>What is the Sustainability Report Alignment (SRA) tool?</h3>
+    <p>The Sustainability Report Alignment (SRA) tool is an AI-based analytical tool that compares financial institutions’ sustainability or ESG reports with established sustainability standards and regulations. Its purpose is to assess how closely a report aligns with a selected standard or regulation and to identify similarities, gaps, and differences in content.</p>
+
+    <h3>Why is report alignment with sustainability standards important?</h3>
+    <p>Sustainable finance reporting is often heterogeneous and inconsistent, frequently omitting key themes such as financed emissions or addressing them in non-standardized ways. As global standards and regulations—such as IFRS S1 and S2—gain importance, alignment with established frameworks becomes increasingly necessary for transparency, comparability, and credibility.</p>
+
+    <h3>What problem does the SRA tool address?</h3>
+    <p>The SRA tool addresses the gap between sustainability standards and actual industry reporting practices. It helps identify where financial institutions’ sustainability disclosures align with, or diverge from, regulatory and standard-setting expectations across environmental, social, and governance (ESG) dimensions.</p>
+
+    <h3>How does the SRA tool work?</h3>
+    <p>Users upload a sustainability or ESG report in PDF format and select a sustainability standard or regulation from a dropdown menu. The tool then analyzes the uploaded report and displays the results once the analysis is complete.</p>
+
+    <h3>What types of standards and regulations are included?</h3>
+    <p>The SRA database contains sustainability standards and regulatory documents identified through academic literature and systematic internet research. The current database includes 88 standards and regulatory documents, which are periodically updated.</p>
+
+    <h3>What methods does the SRA tool use to compare documents?</h3>
+    <p>The analysis relies on artificial intelligence models, including topic models (LDA), BERT-based language models, and generative AI approaches. BERT models are particularly well-suited because they capture contextual and semantic relationships between words in complex regulatory and reporting texts.</p>
+
+    <h3>How are keywords identified in the analysis?</h3>
+    <p>The tool extracts keywords using two approaches: TF-IDF (Term Frequency–Inverse Document Frequency) and contextual keyword extraction using a large language embedding model. These keyword sets are then combined to create a more comprehensive representation of each document’s content.</p>
+
+    <h3>How is similarity between a report and a standard measured?</h3>
+    <p>Similarity is calculated using cosine similarity, which compares documents as vectors in a high-dimensional space. A higher cosine similarity score indicates stronger alignment between the sustainability report and the selected standard or regulation.</p>
+
+    <h3>What does the similarity score mean?</h3>
+    <p>The similarity score ranges from –1 to 1. A score closer to 1 indicates a high degree of alignment between the report and the standard, while a score closer to 0 indicates little similarity.</p>
+
+    <h3>Does the SRA tool evaluate report quality or compliance?</h3>
+    <p>No. The SRA tool does not assess the quality, accuracy, or regulatory compliance of disclosures. It measures textual and thematic alignment between documents and standards.</p>
+
+    <h3>Who is the SRA tool designed for?</h3>
+    <p>The tool is designed for researchers, regulators, financial institutions, students, and policy analysts interested in sustainability reporting alignment.</p>
+
+    <h3>Can the SRA tool be used for comparative analysis?</h3>
+    <p>Yes. The tool supports comparisons across different reports and standards, enabling benchmarking and longitudinal analysis.</p>
+
+    <h3>What are the limitations of the SRA tool?</h3>
+    <p>As a text-based analytical tool, the SRA focuses on language and content rather than underlying data quality or verification. Results should be interpreted as indicative of alignment in reporting language.</p>
+  </section>
+</div>
+
+{% endblock %}

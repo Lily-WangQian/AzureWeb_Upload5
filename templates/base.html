@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Institute for Sustainable Finance - SRA</title>
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+</head>
+
+<body>
+
+  <!-- Top navigation: ONLY SRA dropdown + FAQ -->
+  <header class="isf-header">
+    <nav class="navbar navbar-expand-lg isf-navbar">
+      <div class="container-fluid isf-navwrap">
+
+        <!-- Logo (bigger like screenshot) -->
+        <a class="navbar-brand isf-brand" href="{{ url_for('home') }}">
+          <img
+            src="{{ url_for('static', filename='images/isf_logo.png') }}"
+            alt="Institute for Sustainable Finance"
+            class="isf-logo"
+          />
+        </a>
+
+        <!-- Mobile toggle -->
+        <button class="navbar-toggler isf-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#isfNavbar"
+          aria-controls="isfNavbar" aria-expanded="false" aria-label="Toggle navigation">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+
+        <div class="collapse navbar-collapse" id="isfNavbar">
+
+          <!-- Right-side menu (like your screenshot) -->
+          <ul class="navbar-nav ms-auto mb-2 mb-lg-0 isf-menu-right">
+
+            <!-- SRA Dropdown -->
+            <li class="nav-item dropdown">
+              <a class="nav-link dropdown-toggle isf-pill {% if active_page in ['sra','tool','standards','method','how'] %}active{% endif %}"
+                 href="#"
+                 role="button"
+                 data-bs-toggle="dropdown"
+                 aria-expanded="false">
+                Sustainability Report Alignment (SRA)
+              </a>
+
+              <ul class="dropdown-menu isf-dropdown">
+                <li><a class="dropdown-item isf-dd-item" href="{{ url_for('tool_page') }}">The Tool</a></li>
+                <li><a class="dropdown-item isf-dd-item" href="{{ url_for('standards_page') }}">Standards</a></li>
+                <li><a class="dropdown-item isf-dd-item" href="{{ url_for('method_page') }}">Method</a></li>
+                <li><a class="dropdown-item isf-dd-item" href="{{ url_for('how_page') }}">How does it work?</a></li>
+              </ul>
+            </li>
+
+            <!-- FAQ -->
+            <li class="nav-item">
+              <a class="nav-link isf-link {% if active_page == 'faq' %}active{% endif %}" href="{{ url_for('faq') }}">
+                FAQ
+              </a>
+            </li>
+
+          </ul>
+
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <!-- Page content -->
+  <main class="isf-page">
+    <div class="isf-content">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

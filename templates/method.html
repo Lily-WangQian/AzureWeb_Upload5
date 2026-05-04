@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<a class="back-home" href="{{ url_for('home') }}">← Back to Home</a>
+
+<div class="container sra-container">
+  <h2 class="mb-3">Method</h2>
+
+  <p>The Sustainability Report Alignment (SRA) uses Artificial Intelligence (AI) to compare documents based on keywords.</p>
+
+  <h4 class="mt-4">Database</h4>
+  <p>
+    The standard and regulatory documents have been researched by internet search and based on the current literature.
+    The database contains 88 documents.
+  </p>
+
+  <h4 class="mt-4">Data Processing</h4>
+  <ul>
+    <li><strong>Data Cleaning:</strong> Stopwords are removed from the documents to reduce noise.</li>
+    <li><strong>TF-IDF keywords extraction:</strong> TF-IDF is used to extract the top keywords from the text.</li>
+    <li><strong>Contextual keywords extraction:</strong> A large embedding model is used to extract contextually relevant keywords.</li>
+    <li><strong>Combination:</strong> TF-IDF and contextual keywords are combined for a richer representation.</li>
+  </ul>
+
+  <h4 class="mt-4">Analysis</h4>
+  <p>
+    Similarity between documents is calculated using cosine similarity by representing documents as vectors in a
+    high-dimensional space. A higher score indicates stronger alignment.
+  </p>
+</div>
+{% endblock %}
